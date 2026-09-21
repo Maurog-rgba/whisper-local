@@ -88,14 +88,23 @@ class VoiceCommandManager:
 
             if regex_pattern:
                 try:
-                    if re.search(regex_pattern, text, flags=re.IGNORECASE):
-                        return command
+                    match = re.search(regex_pattern, text, flags=re.IGNORECASE)
+                    if match:
+                        matched = dict(command)
+                        matched['_params'] = {
+                            key: value.strip() if isinstance(value, str) else value
+                            for key, value in match.groupdict().items()
+                            if value is not None
+                        }
+                        return matched
                 except re.error as e:
                     self.logger.warning(f"Invalid regex in command '{trigger}': {e}")
                     continue
 
             if trigger and trigger in normalized:
-                return command
+                matched = dict(command)
+                matched['_params'] = {}
+                return matched
 
         return None
 
@@ -105,7 +114,8 @@ class VoiceCommandManager:
     # argument. shlex.quote is POSIX-correct; on Windows cmd.exe it isn't a
     # complete defence, which is why _execute_shell ALSO forces a confirmation
     # whenever a run: command contains template vars (see _execute_action).
-    def _expand_template(self, value: str, shell_safe: bool = False) -> str:
+    def _expand_template(self, value: str, shell_safe: bool = False,
+                         params: Optional[dict] = None) -> str:
         if not value or '${' not in value:
             return value
         try:
@@ -115,6 +125,11 @@ class VoiceCommandManager:
 
         def _sub(text: str) -> str:
             return shlex.quote(text) if shell_safe else text
+
+        # Named regex groups from match_regex become template variables.
+        # Example: (?P<query>.+) can be referenced later as ${query}.
+        for key, param_value in (params or {}).items():
+            value = value.replace('${' + key + '}', _sub(str(param_value)))
 
         if '${selection}' in value:
             import time
@@ -166,26 +181,36 @@ class VoiceCommandManager:
             print(f"   ⚠ Failed to reload commands.yaml: {e}")
 
     def execute_command(self, command: dict, use_auto_enter: bool = False):
-        trigger = command.get('trigger', '')
-        self._execute_action(command, trigger, use_auto_enter)
+        trigger = command.get('trigger', '') or command.get('match_regex', '')
+        params = command.get('_params', {})
+        self._execute_action(command, trigger, use_auto_enter, params=params)
         for step in command.get('then', []) or []:
             if isinstance(step, dict):
-                self._execute_action(step, trigger + " · then", use_auto_enter=False)
+                self._execute_action(
+                    step, trigger + " · then", use_auto_enter=False, params=params
+                )
 
-    def _execute_action(self, command: dict, trigger: str, use_auto_enter: bool = False):
+    def _execute_action(self, command: dict, trigger: str, use_auto_enter: bool = False,
+                        params: Optional[dict] = None):
         if 'run' in command:
             # If the command pulls in clipboard/selection content, that content is
             # untrusted — force a confirmation so the user always sees the final
             # command before it runs, regardless of the risky-pattern heuristic.
             had_untrusted = '${' in (command['run'] or '')
-            expanded = self._expand_template(command['run'], shell_safe=True)
+            expanded = self._expand_template(
+                command['run'], shell_safe=True, params=params
+            )
             self._execute_shell(expanded, trigger,
                                  require_confirm=command.get('confirm', None),
                                  force_confirm=had_untrusted)
         elif 'hotkey' in command:
             self._send_hotkey(command['hotkey'], trigger)
         elif 'type' in command:
-            self._deliver_text(self._expand_template(command['type']), trigger, use_auto_enter)
+            self._deliver_text(
+                self._expand_template(command['type'], params=params),
+                trigger,
+                use_auto_enter,
+            )
         elif 'rephrase' in command:
             self._execute_rephrase(command['rephrase'], trigger)
         elif 'delay' in command:
