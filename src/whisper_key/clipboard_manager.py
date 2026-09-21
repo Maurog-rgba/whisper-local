@@ -54,6 +54,20 @@ class ClipboardManager:
         else:
             print(f"   ✗ Auto-paste is DISABLED - paste manually with {hotkey_display}")
 
+    # May the app put text on the clipboard WITHOUT the user asking?
+    #
+    # `type_also_copy_to_clipboard: false` with delivery_method "type" is an
+    # explicit request for clipboard-free dictation, usually because a
+    # clipboard manager is logging history or the machine is shared. The
+    # delivery path already respected it; the recovery paths did not
+    # (issue #12). An explicit Copy button is always still allowed - this
+    # governs automatic copies only.
+    @property
+    def silent_copy_allowed(self) -> bool:
+        if self.delivery_method == "type":
+            return bool(self.type_also_copy_to_clipboard)
+        return True
+
     def copy_text(self, text: str) -> bool:
         if not text:
             return False

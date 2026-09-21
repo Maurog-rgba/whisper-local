@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+LF = chr(10)  # newline, for readable assertions about layout
 sys.path.insert(0, str(ROOT / "src"))
 
 
@@ -2084,3 +2085,143 @@ class UninstallSafetyTests(unittest.TestCase):
                 rc = uninstall.run_uninstall()
         self.assertEqual(rc, 0)
         self.assertIn('already clean', buf.getvalue())
+
+
+class UserReportedSeptemberTests(unittest.TestCase):
+    """Issues #9-#13, reported by users running 0.18.3."""
+
+    # --- #9: filler stripping destroyed inline-formatting newlines ---
+    def _fmt_cfg(self, **extra):
+        cfg = {'inline_formatting': True, 'inline_formatting_absorb_punctuation': True,
+               'inline_formatting_replacements': [
+                   {'phrase': 'period', 'replacement': '. '},
+                   {'phrase': 'new line', 'replacement': LF},
+                   {'phrase': 'new paragraph', 'replacement': LF + LF}]}
+        cfg.update(extra)
+        return cfg
+
+    def test_filler_stripping_preserves_line_structure(self):
+        from whisper_key.text_postprocess import postprocess
+        text = 'alpha like period new paragraph bravo new line charlie'
+        without = postprocess(text, self._fmt_cfg(strip_filler_words=False))
+        with_strip = postprocess(text, self._fmt_cfg(strip_filler_words=True))
+        # The ONLY difference may be the filler word itself.
+        self.assertEqual(without.replace(' like', ''), with_strip)
+        self.assertIn(LF + LF, with_strip, 'paragraph break must survive (issue #9)')
+
+    def test_filler_stripping_still_removes_fillers(self):
+        from whisper_key.text_postprocess import postprocess
+        got = postprocess('um hello uh there you know friend', {'strip_filler_words': True})
+        for filler in ('um ', 'uh ', 'you know'):
+            self.assertNotIn(filler, got)
+        self.assertIn('hello', got)
+
+    def test_filler_stripping_does_not_collapse_paragraphs(self):
+        # The second half of the bug: even newlines that survived the filler
+        # pattern were flattened by a blanket whitespace collapse.
+        from whisper_key.text_postprocess import postprocess
+        self.assertEqual(postprocess('one' + LF + LF + 'two', {'strip_filler_words': True}),
+                         'one' + LF + LF + 'two')
+        # Runs of plain spaces SHOULD still collapse.
+        self.assertEqual(postprocess('one    two', {'strip_filler_words': True}), 'one two')
+
+    # --- #10: --history killed its own window ---
+    def test_window_launchers_return_their_thread(self):
+        # main.py waits on this thread. Returning None again would restore the
+        # bug: the window lives on a daemon thread and sys.exit kills it.
+        import inspect
+        for module, func in (('history_window', 'show_history'),
+                             ('cheat_sheet', 'show_cheat_sheet')):
+            try:
+                mod = __import__('whisper_key.' + module, fromlist=[func])
+            except Exception:
+                self.skipTest(module + ' not importable on this platform')
+            source = inspect.getsource(getattr(mod, func))
+            self.assertIn('return thread', source,
+                          func + ' must return its thread so the CLI can join it (issue #10)')
+
+    def test_history_cli_joins_instead_of_sleeping(self):
+        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        block = source[source.index('if args.history:'):source.index('if args.enable_autostart:')]
+        self.assertIn('.join()', block)
+        self.assertNotIn('time.sleep(0.5)', block,
+                         'sleeping then exiting kills the daemon window (issue #10)')
+
+    # --- #12: clipboard-free dictation leaked to the clipboard ---
+    def _clipboard(self, method, also_copy):
+        from whisper_key.clipboard_manager import ClipboardManager
+        c = ClipboardManager.__new__(ClipboardManager)
+        c.delivery_method = method
+        c.type_also_copy_to_clipboard = also_copy
+        return c
+
+    def test_silent_copy_policy(self):
+        self.assertFalse(self._clipboard('type', False).silent_copy_allowed,
+                         'clipboard-free dictation must stay clipboard-free (issue #12)')
+        self.assertTrue(self._clipboard('type', True).silent_copy_allowed)
+        # Paste delivery needs the clipboard by definition.
+        self.assertTrue(self._clipboard('paste', False).silent_copy_allowed)
+
+    def test_fallback_window_respects_clipboard_policy(self):
+        import inspect
+        from whisper_key import fallback_window
+        params = inspect.signature(fallback_window.FallbackWindow.show).parameters
+        self.assertIn('allow_clipboard', params)
+        body = inspect.getsource(fallback_window.FallbackWindow._run_window)
+        self.assertIn('if allow_clipboard:', body,
+                      'the popup must not auto-copy when copying is off')
+        # The explicit Copy button stays unconditional - that is the user asking.
+        self.assertIn('def _copy_again', body)
+
+    def test_recovery_paths_check_the_policy(self):
+        source = (ROOT / 'src' / 'whisper_key' / 'state_manager.py').read_text(encoding='utf-8')
+        self.assertEqual(source.count('silent_copy_allowed'), 2,
+                         'both recovery paths (suppress + no-text-field) must check it')
+
+    # --- #11: an app rule silencing paste looked like a broken app ---
+    def test_copy_only_is_announced_once_per_rule(self):
+        import unittest.mock as mock
+        try:
+            from whisper_key.state_manager import StateManager
+        except Exception:
+            self.skipTest('state_manager not importable on this platform')
+        sm = StateManager.__new__(StateManager)
+        sm.logger = __import__('logging').getLogger('test')
+        sm.system_tray = mock.Mock()
+        rule = {'match': ['code.exe', 'cursor.exe'], 'auto_paste': False}
+        sm._announce_copy_only(rule)
+        sm._announce_copy_only(rule)                    # same rule again
+        sm._announce_copy_only({'match': ['slack.exe']})
+        self.assertEqual(sm.system_tray.notify.call_count, 2,
+                         'once per rule, not once per dictation')
+        said = sm.system_tray.notify.call_args_list[0].args[0]
+        self.assertIn('code.exe', said)
+        self.assertIn('app_rules.yaml', said, 'tell them where to change it')
+
+    # --- #13: macOS 27 SIGTRAP from off-main-thread tray writes ---
+    def test_platform_exposes_ui_thread_marshal(self):
+        from whisper_key.platform import app as platform_app
+        self.assertTrue(hasattr(platform_app, 'run_on_ui_thread'))
+        ran = []
+        platform_app.run_on_ui_thread(lambda: ran.append(1))
+        self.assertEqual(ran, [1], 'must actually run the callable')
+
+    def test_no_unguarded_tray_writes_remain(self):
+        # Every AppKit-touching write must go through _on_ui_thread. A direct
+        # assignment from a worker thread is an instant SIGTRAP on macOS 27.
+        import re
+        source = (ROOT / 'src' / 'whisper_key' / 'system_tray.py').read_text(encoding='utf-8')
+        offenders = []
+        for i, line in enumerate(source.splitlines(), 1):
+            stripped = line.strip()
+            if re.match(r'^self[.]icon[.](icon|menu|title)\s*=', stripped):
+                offenders.append(str(i) + ': ' + stripped)
+            if stripped.startswith('self.icon.notify(') and '_on_ui_thread' not in line:
+                offenders.append(str(i) + ': ' + stripped)
+        self.assertEqual(offenders, [],
+                         'tray writes must be marshalled to the UI thread (issue #13)')
+
+    def test_macos_marshal_uses_main_queue(self):
+        source = (ROOT / 'src' / 'whisper_key' / 'platform' / 'macos' / 'app.py').read_text(encoding='utf-8')
+        self.assertIn('NSThread.isMainThread()', source, 'fast path when already on main')
+        self.assertIn('mainQueue', source, 'must dispatch to the main queue')

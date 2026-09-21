@@ -13,7 +13,7 @@ from typing import Optional, TYPE_CHECKING
 from pathlib import Path
 
 from .utils import open_file
-from .platform import permissions, icons, console
+from .platform import app as platform_app, permissions, icons, console
 
 try:
     import pystray
@@ -439,7 +439,7 @@ class SystemTray:
                 auto_paste = False
 
         self.state_manager.update_transcription_mode(auto_paste)
-        self.icon.menu = self._create_menu()
+        self._set_menu()
 
     def _select_model(self, model_key: str):
         try:
@@ -447,7 +447,7 @@ class SystemTray:
 
             if success:
                 self.config_manager.update_user_setting('whisper', 'model', model_key)
-                self.icon.menu = self._create_menu()
+                self._set_menu()
             else:
                 self.logger.warning(f"Request to change model to {model_key} was not accepted")
 
@@ -458,7 +458,7 @@ class SystemTray:
         try:
             success = self.state_manager.set_audio_host(host_name)
             if success:
-                self.icon.menu = self._create_menu()
+                self._set_menu()
             else:
                 self.logger.warning(f"Request to change audio host to {host_name} was not accepted")
         except Exception as e:
@@ -469,7 +469,7 @@ class SystemTray:
 
         if success:
             self.config_manager.update_user_setting('audio', 'input_device', device_id)
-            self.icon.menu = self._create_menu()
+            self._set_menu()
         else:
             self.logger.warning(f"Request to change audio device to {device_id} was not accepted")
 
@@ -595,13 +595,41 @@ class SystemTray:
         except Exception as e:
             self.logger.error(f"Failed to launch {flag}: {e}")
     
+    # Every mutation of the tray object goes through here.
+    #
+    # On macOS these reach AppKit, which must only be touched from the main
+    # thread. Through macOS 26 doing otherwise merely logged a warning; macOS 27
+    # made it a hard SIGTRAP that kills the process outright (issue #13). The
+    # callers here are worker threads — the recording thread drives update_state()
+    # and the level monitor rewrites the title every 150 ms — so without this the
+    # app dies on the first hotkey press. SIGTRAP is not a Python exception, so
+    # the try/except below is for ordinary failures only; it could never have
+    # caught the crash.
+    #
+    # On Windows run_on_ui_thread() calls straight through, so this costs nothing.
+    def _on_ui_thread(self, mutate, description: str):
+        def guarded():
+            try:
+                mutate()
+            except Exception as e:
+                self.logger.debug(f"Tray {description} failed: {e}")
+        try:
+            platform_app.run_on_ui_thread(guarded)
+        except Exception as e:
+            self.logger.debug(f"Could not dispatch tray {description}: {e}")
+
+    # Menus are BUILT off-thread (pure Python) and only ASSIGNED on the UI
+    # thread, which is the part that reaches NSStatusItem.
+    def _set_menu(self):
+        if not self.icon:
+            return
+        menu = self._create_menu()
+        self._on_ui_thread(lambda: setattr(self.icon, 'menu', menu), 'menu update')
+
     def notify(self, message: str, title: str = "Whisper Local"):
         if not TRAY_AVAILABLE or not self.is_running or not self.icon:
             return
-        try:
-            self.icon.notify(message, title)
-        except Exception as e:
-            self.logger.debug(f"Tray notify failed: {e}")
+        self._on_ui_thread(lambda: self.icon.notify(message, title), 'notify')
 
     def update_state(self, new_state: str):
         if not TRAY_AVAILABLE or not self.is_running:
@@ -609,20 +637,17 @@ class SystemTray:
 
         self.current_state = new_state
 
-        try:
-            self.icon.icon = self.icons[new_state]
-            self.icon.menu = self._create_menu()
-        except Exception as e:
-            self.logger.error(f"Failed to update tray icon: {e}")
+        art = self.icons.get(new_state)
+        if art is not None:
+            self._on_ui_thread(lambda: setattr(self.icon, 'icon', art), 'icon art')
+        self._set_menu()
 
         if new_state == "recording":
             self._start_level_monitor()
         else:
             self._stop_level_monitor()
-            try:
-                self.icon.title = self.tray_config.get('tooltip', 'Whisper Local')
-            except Exception:
-                pass
+            tooltip = self.tray_config.get('tooltip', 'Whisper Local')
+            self._on_ui_thread(lambda: setattr(self.icon, 'title', tooltip), 'tooltip')
 
     def _start_level_monitor(self):
         import threading
@@ -641,11 +666,10 @@ class SystemTray:
                 except Exception:
                     level = 0.0
                 bars = self._level_bars(level)
-                try:
-                    if self.icon:
-                        self.icon.title = f"Whisper Local · 🎤 {bars}"
-                except Exception:
-                    pass
+                if self.icon:
+                    title = f"Whisper Local · 🎤 {bars}"
+                    self._on_ui_thread(
+                        lambda t=title: setattr(self.icon, 'title', t), 'level title')
                 self._level_stop.wait(0.15)
 
         self._level_thread = threading.Thread(target=loop, daemon=True, name="tray-level")
@@ -662,13 +686,7 @@ class SystemTray:
         return bins[scaled]
 
     def refresh_menu(self):
-        if not self.icon:
-            return
-
-        try:
-            self.icon.menu = self._create_menu()
-        except Exception as e:
-            self.logger.error(f"Failed to refresh tray menu: {e}")
+        self._set_menu()
     
     def start(self):
         if not self.available:

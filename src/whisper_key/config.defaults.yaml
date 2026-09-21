@@ -264,6 +264,11 @@ clipboard: # Clipboard Behavior
     # Automatically paste after transcription
     # true = paste immediately to active window
     # false = only copy to clipboard (paste manually)
+    #
+    # NOTE: app_rules.yaml can override this per application, and the shipped
+    # rules do — code editors (VS Code, Cursor, PyCharm, ...) are copy-only so
+    # dictation never types into source unexpectedly. If a specific app only
+    # copies, check app_rules.yaml before this setting.
     auto_paste: true
 
     # Delivery method for auto-paste

@@ -1,8 +1,13 @@
 # fallback_window.py
 # Safety net for dictation with nowhere to go. When no text field is focused,
 # auto-paste would silently drop the transcript — instead it appears here in a
-# small window, pre-selected and already on the clipboard, so the user never
-# loses what they just said. Runs its own Tk root on a daemon thread.
+# small window, pre-selected, so the user never loses what they just said.
+# Runs its own Tk root on a daemon thread.
+#
+# Normally the transcript is also placed on the clipboard. When the user has
+# asked for clipboard-free dictation (allow_clipboard=False) this window is the
+# ONLY copy of the text, so it never copies on its own — the Copy button is
+# there for when they want it.
 
 import logging
 import threading
@@ -28,9 +33,10 @@ class FallbackWindow:
         # Guard against stacking: only one fallback window (and its Tk root) is
         # alive at a time. This both avoids a window pile-up on repeated failed
         # deliveries and keeps us to a single transient Tk root coexisting with
-        # the always-on level overlay. The transcript is copied to the clipboard
-        # by the caller BEFORE show() is called, so skipping a duplicate never
-        # loses the text — it's always recoverable with Ctrl+V.
+        # the always-on level overlay. Normally the caller has already copied the
+        # transcript before show(), so skipping a duplicate never loses it. With
+        # clipboard copying off there is no such safety net, and show() logs a
+        # warning in that case.
         self._lock = threading.Lock()
         self._open = False
 
@@ -41,18 +47,30 @@ class FallbackWindow:
         except ImportError:
             return False
 
-    def show(self, transcript: str, reason: Optional[str] = None):
+    # allow_clipboard=False means the user asked for clipboard-free dictation,
+    # so the window shows the text but never copies it on its own. The Copy
+    # button still works — that is the user asking (issue #12).
+    def show(self, transcript: str, reason: Optional[str] = None,
+             allow_clipboard: bool = True):
         if not self._available or not transcript:
             return
         with self._lock:
             if self._open:
-                logger.info("Fallback window already open; skipping duplicate "
-                            "(transcript is already on the clipboard).")
+                if allow_clipboard:
+                    logger.info("Fallback window already open; skipping duplicate "
+                                "(transcript is already on the clipboard).")
+                else:
+                    # Nothing is on the clipboard to fall back on, so this one
+                    # really is lost. Say so loudly rather than at info level.
+                    logger.warning("Fallback window already open and clipboard "
+                                   "copying is off; this transcript was not shown.")
                 return
             self._open = True
         thread = threading.Thread(
             target=self._run_window,
-            args=(transcript, reason or "No text field was focused — your dictation is safe here."),
+            args=(transcript,
+                  reason or "No text field was focused — your dictation is safe here.",
+                  allow_clipboard),
             daemon=True,
             name='fallback-window',
         )
@@ -61,7 +79,8 @@ class FallbackWindow:
     # Window body, run on a daemon thread with its own Tk root. The transcript is
     # inserted pre-selected so a single Ctrl+C (or the Copy button) rescues it —
     # this window only ever appears when delivery already had nowhere to go.
-    def _run_window(self, transcript: str, reason: str):
+    def _run_window(self, transcript: str, reason: str,
+                    allow_clipboard: bool = True):
         try:
             import tkinter as tk
             import pyperclip
@@ -117,7 +136,10 @@ class FallbackWindow:
             button_row = tk.Frame(outer, bg=BG)
             button_row.pack(fill='x')
 
-            status_var = tk.StringVar(value="Already on your clipboard — just paste anywhere with Ctrl+V.")
+            status_var = tk.StringVar(value=(
+                "Already on your clipboard — just paste anywhere with Ctrl+V."
+                if allow_clipboard else
+                "Clipboard copying is off — press Copy if you want it there."))
             status = tk.Label(button_row, textvariable=status_var,
                               bg=BG, fg=DIM, font=('Segoe UI', 9))
             status.pack(side='left')
@@ -159,10 +181,12 @@ class FallbackWindow:
             root.bind('<Control-c>', _copy_again)
             text_widget.focus_set()
 
-            try:
-                pyperclip.copy(transcript)
-            except Exception:
-                pass
+            # Only pre-fill the clipboard when automatic copying is permitted.
+            if allow_clipboard:
+                try:
+                    pyperclip.copy(transcript)
+                except Exception:
+                    pass
 
             root.mainloop()
         except Exception as e:

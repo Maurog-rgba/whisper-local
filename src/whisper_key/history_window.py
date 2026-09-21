@@ -188,7 +188,12 @@ def show_history():
 
         root.mainloop()
 
-    threading.Thread(target=_run, daemon=True, name='history-window').start()
+    # Returned so a CLI caller can wait on it. The thread is a daemon, so a
+    # process that exits without joining kills the window instantly — which is
+    # exactly what `--history` used to do (issue #10).
+    thread = threading.Thread(target=_run, daemon=True, name='history-window')
+    thread.start()
+    return thread
 
 
 # Modal-ish correction editor. `source` is the selected transcript (shown as a

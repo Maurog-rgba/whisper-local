@@ -437,9 +437,12 @@ def main():
 
     if args.history:
         from .history_window import show_history
-        show_history()
-        import time
-        time.sleep(0.5)
+        # Wait for the window to close. It runs on a daemon thread, so exiting
+        # here would kill it on the spot — the window opened and vanished
+        # immediately when launched from the tray (issue #10).
+        window = show_history()
+        if window:
+            window.join()
         sys.exit(0)
 
     if args.enable_autostart:
@@ -462,9 +465,10 @@ def main():
 
     if args.cheat_sheet:
         from .cheat_sheet import show_cheat_sheet
-        show_cheat_sheet()
-        import time
-        time.sleep(0.5)
+        # Same daemon-thread trap as --history above.
+        window = show_cheat_sheet()
+        if window:
+            window.join()
         sys.exit(0)
 
     if args.bundle_logs is not None:

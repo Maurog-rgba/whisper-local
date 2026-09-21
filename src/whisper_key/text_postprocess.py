@@ -375,14 +375,25 @@ def _apply_replacements(text: str, items: list) -> str:
     return text
 
 
+# Remove filler words without touching layout. Both the trailing run and the
+# whitespace collapse are restricted to spaces and tabs ([ \t]), never \s:
+# \s matches newlines, so the old version ate the line and paragraph breaks
+# that inline formatting had just inserted — "like\n\nBravo" lost its
+# paragraph, and any surviving \n\n was then collapsed to a single space by
+# the \s{2,} pass (issue #9). Structural whitespace is someone else's output,
+# and this filter has no business rewriting it.
 def _strip_fillers(text: str) -> str:
     pattern = re.compile(
-        r'\b(um|uh|erm|uhm|like|you know)\b[,]?\s*',
+        r'\b(um|uh|erm|uhm|like|you know)\b[,]?[ \t]*',
         flags=re.IGNORECASE,
     )
     cleaned = pattern.sub('', text)
-    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
-    return cleaned or text
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    # A filler removed at the start of a line leaves the indent behind; drop
+    # spaces that now sit against a break, but keep the break itself.
+    cleaned = re.sub(r'[ \t]+(\r?\n)', r'\1', cleaned)
+    cleaned = re.sub(r'(\r?\n)[ \t]+', r'\1', cleaned)
+    return cleaned.strip() or text
 
 
 def _capitalize_first(text: str) -> str:

@@ -30,12 +30,15 @@ def show_cheat_sheet(config_manager=None, transforms_manager=None):
         except Exception:
             pass
 
-    threading.Thread(
+    # Returned so a CLI caller can wait on it; see issue #10.
+    thread = threading.Thread(
         target=_run,
         args=(config_manager, transforms_manager),
         daemon=True,
         name='cheat-sheet',
-    ).start()
+    )
+    thread.start()
+    return thread
 
 
 # Window body, run on a daemon thread with its own Tk root (same one-root-per-

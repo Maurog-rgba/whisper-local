@@ -2,6 +2,56 @@
 
 History inherited from upstream [`whisper-key-local`](https://github.com/PinW/whisper-key-local). Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0]
+
+Everything reported by users on 0.18.3.
+
+### Fixed
+- **macOS 27: the app died on the first recording**
+  ([#13](https://github.com/drajb/whisper-local/issues/13), @rusifele). Cocoa has
+  always required AppKit to be touched from the main thread; through macOS 26 a
+  background-thread menu-bar write only logged a warning, and macOS 27 turned it
+  into a hard `SIGTRAP`. The tray was written from two worker threads — the
+  recording thread swapping the icon and menu, and the level monitor rewriting
+  the title every 150 ms — so pressing the hotkey killed the process outright,
+  with nothing in the log. `SIGTRAP` is not a Python exception, which is why the
+  `try`/`except` around every tray write could never have caught it.
+  All tray writes now go through a platform `run_on_ui_thread()`, which
+  dispatches to the main queue on macOS and calls straight through on Windows.
+- **Filler-word stripping destroyed line and paragraph breaks**
+  ([#9](https://github.com/drajb/whisper-local/issues/9), @Eevoo). With
+  `strip_filler_words: true`, the `\n` and `\n\n` that inline formatting had
+  just inserted were flattened into ordinary spaces, so "new paragraph" silently
+  did nothing. Two causes, both fixed: the filler pattern's trailing `\s*` ate
+  the following newlines, and a blanket `\s{2,}` collapse then flattened any
+  that survived. Both are now restricted to spaces and tabs. Output is
+  byte-identical with stripping on or off apart from the filler words themselves.
+- **Transcript history closed the instant it opened**
+  ([#10](https://github.com/drajb/whisper-local/issues/10), @ForrestOfBarnes).
+  `--history` started the window on a daemon thread, slept half a second, then
+  exited — and exiting kills daemon threads. The window really did appear and
+  vanish. It now waits for the window to close. `--cheat-sheet` had the identical
+  bug and is fixed too.
+- **Clipboard-free dictation still touched the clipboard**
+  ([#12](https://github.com/drajb/whisper-local/issues/12), @explorerzkb). With
+  `delivery_method: type` and `type_also_copy_to_clipboard: false`, the two
+  recovery paths (app-rule suppression, and no focused text field) copied anyway,
+  and the popup copied a second time. Both now honour the setting.
+  Those copies existed so the transcript could not be lost, so rather than just
+  removing them, the text is surfaced in the recovery window — which holds it and
+  offers an explicit Copy button. Privacy fixed without trading it for data loss.
+
+### Changed
+- **A per-app rule turning off auto-paste now says so**
+  ([#11](https://github.com/drajb/whisper-local/issues/11), @ForrestOfBarnes,
+  diagnosed by @Syncriix). Dictating into VS Code copies instead of pasting —
+  that is the shipped code-editor rule working as intended, so nothing types into
+  source unexpectedly — but nothing said so, and it reads as a broken app. The
+  first time a rule makes delivery copy-only for an app, a notification explains
+  it and points at `app_rules.yaml`. Once per rule per session, not once per
+  dictation. The settings checkbox and the config comment now mention that
+  per-app rules can override the global setting.
+
 ## [0.18.3]
 
 ### Added

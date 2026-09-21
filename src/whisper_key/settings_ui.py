@@ -424,7 +424,8 @@ def _build_general_tab(nb, cm, vars_, row_index):
     v = tk.BooleanVar(value=bool(_v(cfg, 'clipboard', 'auto_paste', default=True)))
     vars_['clipboard.auto_paste'] = v
     _check(tab, 'clipboard.auto_paste',
-           'Auto-paste at cursor after transcription', v, row_index)
+           'Auto-paste at cursor after transcription  (per-app rules can override)',
+           v, row_index)
 
     v = tk.BooleanVar(value=bool(_v(cfg, 'audio', 'continuous_mode', default=False)))
     vars_['audio.continuous_mode'] = v

@@ -1,10 +1,51 @@
 # Whisper Local — Code Audit & Improvement Backlog
 
-**Last updated:** 2026-08-24
+**Last updated:** 2026-09-21
 **Audited versions:** 0.10.0 (Round 1, below) and 0.11.x (Round 2, next section)
 **Method:** Parallel subsystem reviews + manual verification of every finding before fixing.
 
 > This is a living document. Each issue has a stable ID (e.g. `SRV-1`) so commits and PRs can reference it. When you fix one, change its **Status** to `FIXED (<commit>)` rather than deleting it, so history stays readable.
+
+---
+
+## Round 10 (0.19.0) — user-reported issues (2026-09)
+
+Five issues from users running 0.18.3. Every root cause was reproduced locally
+before any fix; two turned out to be more interesting than the report suggested.
+
+- **ISS-13 (Critical, app unusable)** macOS 27 made off-main-thread AppKit access
+  a hard `SIGTRAP` instead of a logged warning, so the first hotkey press killed
+  the process. Ten tray writes were reached from worker threads — the recording
+  thread and a level monitor rewriting the title every 150 ms. `SIGTRAP` is not a
+  Python exception, so the existing per-write `try`/`except` was decorative.
+  Added `run_on_ui_thread()` to the platform layer (main-queue dispatch on macOS,
+  passthrough on Windows) and routed every tray mutation through it; menus are
+  still BUILT off-thread and only ASSIGNED on it. +3 tests, one of which scans
+  the source for unguarded writes so a new one fails CI.
+- **ISS-9 (High, silent data mangling)** `_strip_fillers` used `\s` in both its
+  trailing run and its whitespace collapse, so enabling filler stripping deleted
+  the line and paragraph breaks inline formatting had just inserted. Narrowed
+  both to `[ \t]`. +3 tests, including one asserting output is identical with
+  stripping on and off apart from the fillers.
+- **ISS-10 (High, feature entirely broken)** `--history` and `--cheat-sheet`
+  spawned their window on a daemon thread, slept 0.5 s and exited, killing it.
+  The launchers now return the thread and the CLI joins it. Verified by
+  subprocess: alive past 3 s where it previously died at 0.5 s.
+- **ISS-12 (Med, privacy)** The clipboard-free setting was honoured on delivery
+  but not on the two recovery paths. Fixed via a single
+  `ClipboardManager.silent_copy_allowed` policy. Note the nuance: those copies
+  were the reason a suppressed or undeliverable transcript was not lost, so the
+  fix routes such cases to the recovery window instead of silently dropping the
+  safety net. An explicit Copy button is always still allowed.
+- **ISS-11 (Not a bug, real UX failure)** "Fails to transcribe in VS Code" was
+  the shipped copy-only code-editor rule working correctly — @Syncriix diagnosed
+  it from the log. But the app said nothing, so the only available conclusion was
+  that it was broken. Now announced once per rule per session, with a pointer to
+  `app_rules.yaml`; the settings label and config comment no longer imply the
+  global toggle is the final word. Worth remembering: a correct behaviour nobody
+  can discover is still a defect.
+
+187 tests pass; `--doctor` green.
 
 ---
 
