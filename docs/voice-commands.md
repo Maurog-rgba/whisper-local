@@ -52,129 +52,13 @@ Captured values become template parameters such as `${query}` or `${text}`.
 
 ```yaml
   # "abra o chrome e pesquise como rodar IA localmente"
-  - match_regex: '^(?:abra|abre) (?:o )?chrome e (?:pesquise|procure)(?: por)? (?P<query>.+)
-### Hotkey commands
-
-Send keyboard shortcuts to the active window. Use `+` to combine keys.
-
-```yaml
-  - trigger: "undo"
-    hotkey: "ctrl+z"
-  - trigger: "select all"
-    hotkey: "ctrl+a"
-  - trigger: "snap left"
-    hotkey: "win+left"
-  - trigger: "show desktop"
-    hotkey: "win+d"
-```
-
-### Type commands
-
-Deliver pre-written text to the active window using the same method as transcription (clipboard paste or direct typing, depending on your `clipboard.delivery_method` setting).
-
-If you stop recording with the **auto-send key** (Alt by default), Enter is sent after the text — useful for chat apps and terminals.
-
-```yaml
-  - trigger: "my email"
-    type: "user@example.com"
-  - trigger: "my address"
-    type: "123 Main Street, City, State 12345"
-```
-
-### Shell commands
-
-Run any shell command. The command runs asynchronously — it won't block the app.
-
-```yaml
-  - trigger: "open notepad"
-    run: 'notepad.exe'
-  - trigger: "open browser"
-    run: 'start https://www.google.com'
-  - trigger: "open downloads"
-    run: 'explorer "%USERPROFILE%\Downloads"'
-  - trigger: "lock screen"
-    run: 'rundll32.exe user32.dll,LockWorkStation'
-```
-
-## Hotkey
-
-The command hotkey and stop key are configured in your user settings (`user_settings.yaml`):
-```yaml
-hotkey:
-  command_hotkey: "alt+win | macos: fn+command"
-  stop_key: "ctrl | macos: fn"
-  auto_send_key: "alt | macos: option"
-```
-
-- **stop_key** — stops recording and executes the matched command
-- **auto_send_key** — same as stop key, but also sends Enter after `type` commands (ignored for `run` and `hotkey`)
-
-Both keys are shared between transcription and command modes.
-
+  - match_regex: '^(?:abra|abre) (?:o )?chrome e (?:pesquise|procure)(?: por)? (?P<query>.+)$'
     web_search: '${query}'
     engine: "google"
     browser: "chrome"
 
   # "digite bom dia, vou verificar isso hoje"
-  - match_regex: '^(?:digite|escreva) (?P<text>.+)
-### Hotkey commands
-
-Send keyboard shortcuts to the active window. Use `+` to combine keys.
-
-```yaml
-  - trigger: "undo"
-    hotkey: "ctrl+z"
-  - trigger: "select all"
-    hotkey: "ctrl+a"
-  - trigger: "snap left"
-    hotkey: "win+left"
-  - trigger: "show desktop"
-    hotkey: "win+d"
-```
-
-### Type commands
-
-Deliver pre-written text to the active window using the same method as transcription (clipboard paste or direct typing, depending on your `clipboard.delivery_method` setting).
-
-If you stop recording with the **auto-send key** (Alt by default), Enter is sent after the text — useful for chat apps and terminals.
-
-```yaml
-  - trigger: "my email"
-    type: "user@example.com"
-  - trigger: "my address"
-    type: "123 Main Street, City, State 12345"
-```
-
-### Shell commands
-
-Run any shell command. The command runs asynchronously — it won't block the app.
-
-```yaml
-  - trigger: "open notepad"
-    run: 'notepad.exe'
-  - trigger: "open browser"
-    run: 'start https://www.google.com'
-  - trigger: "open downloads"
-    run: 'explorer "%USERPROFILE%\Downloads"'
-  - trigger: "lock screen"
-    run: 'rundll32.exe user32.dll,LockWorkStation'
-```
-
-## Hotkey
-
-The command hotkey and stop key are configured in your user settings (`user_settings.yaml`):
-```yaml
-hotkey:
-  command_hotkey: "alt+win | macos: fn+command"
-  stop_key: "ctrl | macos: fn"
-  auto_send_key: "alt | macos: option"
-```
-
-- **stop_key** — stops recording and executes the matched command
-- **auto_send_key** — same as stop key, but also sends Enter after `type` commands (ignored for `run` and `hotkey`)
-
-Both keys are shared between transcription and command modes.
-
+  - match_regex: '^(?:digite|escreva) (?P<text>.+)$'
     type: '${text}'
 ```
 
@@ -186,65 +70,7 @@ automation because they do not execute the spoken text through a shell.
 ### Web search
 
 ```yaml
-  - match_regex: '^pesquise (?P<query>.+)
-### Hotkey commands
-
-Send keyboard shortcuts to the active window. Use `+` to combine keys.
-
-```yaml
-  - trigger: "undo"
-    hotkey: "ctrl+z"
-  - trigger: "select all"
-    hotkey: "ctrl+a"
-  - trigger: "snap left"
-    hotkey: "win+left"
-  - trigger: "show desktop"
-    hotkey: "win+d"
-```
-
-### Type commands
-
-Deliver pre-written text to the active window using the same method as transcription (clipboard paste or direct typing, depending on your `clipboard.delivery_method` setting).
-
-If you stop recording with the **auto-send key** (Alt by default), Enter is sent after the text — useful for chat apps and terminals.
-
-```yaml
-  - trigger: "my email"
-    type: "user@example.com"
-  - trigger: "my address"
-    type: "123 Main Street, City, State 12345"
-```
-
-### Shell commands
-
-Run any shell command. The command runs asynchronously — it won't block the app.
-
-```yaml
-  - trigger: "open notepad"
-    run: 'notepad.exe'
-  - trigger: "open browser"
-    run: 'start https://www.google.com'
-  - trigger: "open downloads"
-    run: 'explorer "%USERPROFILE%\Downloads"'
-  - trigger: "lock screen"
-    run: 'rundll32.exe user32.dll,LockWorkStation'
-```
-
-## Hotkey
-
-The command hotkey and stop key are configured in your user settings (`user_settings.yaml`):
-```yaml
-hotkey:
-  command_hotkey: "alt+win | macos: fn+command"
-  stop_key: "ctrl | macos: fn"
-  auto_send_key: "alt | macos: option"
-```
-
-- **stop_key** — stops recording and executes the matched command
-- **auto_send_key** — same as stop key, but also sends Enter after `type` commands (ignored for `run` and `hotkey`)
-
-Both keys are shared between transcription and command modes.
-
+  - match_regex: '^pesquise (?P<query>.+)$'
     web_search: '${query}'
     engine: "google"
     browser: "chrome"
