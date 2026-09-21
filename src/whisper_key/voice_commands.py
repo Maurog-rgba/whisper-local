@@ -11,6 +11,8 @@ import re
 import shlex
 import shutil
 import subprocess
+import webbrowser
+from urllib.parse import quote_plus
 from typing import Optional
 
 import pyperclip
@@ -65,14 +67,20 @@ class VoiceCommandManager:
         for i, cmd in enumerate(raw_commands):
             trigger = cmd.get('trigger', '')
             has_match = bool(trigger or cmd.get('match_regex'))
-            action_count = sum(1 for key in ('run', 'hotkey', 'type', 'rephrase') if key in cmd)
+            action_count = sum(
+                1 for key in ('run', 'hotkey', 'type', 'rephrase', 'web_search', 'open_url')
+                if key in cmd
+            )
 
             if not has_match:
                 self.logger.warning(f"Command {i}: missing trigger and match_regex, skipping")
                 continue
 
             if action_count != 1:
-                self.logger.warning(f"Command '{trigger}': needs exactly one of 'run', 'hotkey', 'type', or 'rephrase', skipping")
+                self.logger.warning(
+                    f"Command '{trigger}': needs exactly one action "
+                    "('run', 'hotkey', 'type', 'rephrase', 'web_search', or 'open_url'), skipping"
+                )
                 continue
 
             valid.append(cmd)
@@ -88,14 +96,23 @@ class VoiceCommandManager:
 
             if regex_pattern:
                 try:
-                    if re.search(regex_pattern, text, flags=re.IGNORECASE):
-                        return command
+                    match = re.search(regex_pattern, text, flags=re.IGNORECASE)
+                    if match:
+                        matched = dict(command)
+                        matched['_params'] = {
+                            key: value.strip() if isinstance(value, str) else value
+                            for key, value in match.groupdict().items()
+                            if value is not None
+                        }
+                        return matched
                 except re.error as e:
                     self.logger.warning(f"Invalid regex in command '{trigger}': {e}")
                     continue
 
             if trigger and trigger in normalized:
-                return command
+                matched = dict(command)
+                matched['_params'] = {}
+                return matched
 
         return None
 
@@ -105,7 +122,8 @@ class VoiceCommandManager:
     # argument. shlex.quote is POSIX-correct; on Windows cmd.exe it isn't a
     # complete defence, which is why _execute_shell ALSO forces a confirmation
     # whenever a run: command contains template vars (see _execute_action).
-    def _expand_template(self, value: str, shell_safe: bool = False) -> str:
+    def _expand_template(self, value: str, shell_safe: bool = False,
+                         params: Optional[dict] = None) -> str:
         if not value or '${' not in value:
             return value
         try:
@@ -115,6 +133,11 @@ class VoiceCommandManager:
 
         def _sub(text: str) -> str:
             return shlex.quote(text) if shell_safe else text
+
+        # Named regex groups from match_regex become template variables.
+        # Example: (?P<query>.+) can be referenced later as ${query}.
+        for key, param_value in (params or {}).items():
+            value = value.replace('${' + key + '}', _sub(str(param_value)))
 
         if '${selection}' in value:
             import time
@@ -166,26 +189,49 @@ class VoiceCommandManager:
             print(f"   ⚠ Failed to reload commands.yaml: {e}")
 
     def execute_command(self, command: dict, use_auto_enter: bool = False):
-        trigger = command.get('trigger', '')
-        self._execute_action(command, trigger, use_auto_enter)
+        trigger = command.get('trigger', '') or command.get('match_regex', '')
+        params = command.get('_params', {})
+        self._execute_action(command, trigger, use_auto_enter, params=params)
         for step in command.get('then', []) or []:
             if isinstance(step, dict):
-                self._execute_action(step, trigger + " · then", use_auto_enter=False)
+                self._execute_action(
+                    step, trigger + " · then", use_auto_enter=False, params=params
+                )
 
-    def _execute_action(self, command: dict, trigger: str, use_auto_enter: bool = False):
+    def _execute_action(self, command: dict, trigger: str, use_auto_enter: bool = False,
+                        params: Optional[dict] = None):
         if 'run' in command:
             # If the command pulls in clipboard/selection content, that content is
             # untrusted — force a confirmation so the user always sees the final
             # command before it runs, regardless of the risky-pattern heuristic.
             had_untrusted = '${' in (command['run'] or '')
-            expanded = self._expand_template(command['run'], shell_safe=True)
+            expanded = self._expand_template(
+                command['run'], shell_safe=True, params=params
+            )
             self._execute_shell(expanded, trigger,
                                  require_confirm=command.get('confirm', None),
                                  force_confirm=had_untrusted)
         elif 'hotkey' in command:
             self._send_hotkey(command['hotkey'], trigger)
         elif 'type' in command:
-            self._deliver_text(self._expand_template(command['type']), trigger, use_auto_enter)
+            self._deliver_text(
+                self._expand_template(command['type'], params=params),
+                trigger,
+                use_auto_enter,
+            )
+        elif 'web_search' in command:
+            query = self._expand_template(command['web_search'], params=params)
+            browser = self._expand_template(command.get('browser', ''), params=params)
+            self._search_web(
+                query,
+                engine=command.get('engine', 'google'),
+                browser=browser or None,
+                trigger=trigger,
+            )
+        elif 'open_url' in command:
+            url = self._expand_template(command['open_url'], params=params)
+            browser = self._expand_template(command.get('browser', ''), params=params)
+            self._open_browser_url(url, browser=browser or None, trigger=trigger)
         elif 'rephrase' in command:
             self._execute_rephrase(command['rephrase'], trigger)
         elif 'delay' in command:
@@ -196,6 +242,99 @@ class VoiceCommandManager:
                 seconds = 0.0
             seconds = max(0.0, min(60.0, seconds))
             time.sleep(seconds)
+
+    def _find_browser_executable(self, browser: str) -> Optional[str]:
+        browser = (browser or '').strip().lower()
+        executable_names = {
+            'chrome': ['chrome.exe' if os.name == 'nt' else 'google-chrome', 'chrome'],
+            'edge': ['msedge.exe' if os.name == 'nt' else 'microsoft-edge', 'msedge'],
+            'firefox': ['firefox.exe' if os.name == 'nt' else 'firefox'],
+        }
+        for name in executable_names.get(browser, [browser] if browser else []):
+            found = shutil.which(name)
+            if found:
+                return found
+
+        if os.name != 'nt':
+            return None
+
+        roots = [
+            os.environ.get('PROGRAMFILES', ''),
+            os.environ.get('PROGRAMFILES(X86)', ''),
+            os.environ.get('LOCALAPPDATA', ''),
+        ]
+        relative_paths = {
+            'chrome': [
+                os.path.join('Google', 'Chrome', 'Application', 'chrome.exe'),
+            ],
+            'edge': [
+                os.path.join('Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            ],
+            'firefox': [
+                os.path.join('Mozilla Firefox', 'firefox.exe'),
+            ],
+        }
+        for root in roots:
+            if not root:
+                continue
+            for relative in relative_paths.get(browser, []):
+                candidate = os.path.join(root, relative)
+                if os.path.isfile(candidate):
+                    return candidate
+        return None
+
+    def _open_browser_url(self, url: str, browser: Optional[str] = None,
+                          trigger: str = ''):
+        url = (url or '').strip()
+        if not re.match(r'^https?://', url, flags=re.IGNORECASE):
+            self.logger.warning(f"Refusing non-http URL for voice command '{trigger}': {url}")
+            print("   ✗ Refused URL: only http/https links are allowed")
+            return
+
+        try:
+            if browser and browser.lower() not in ('default', 'system'):
+                executable = self._find_browser_executable(browser)
+                if executable:
+                    subprocess.Popen([executable, url])
+                    self.logger.info(
+                        f"Opened URL via {browser} for '{trigger}': {url}"
+                    )
+                    print(f"   ✓ Opened in {browser}: {url}")
+                    return
+                self.logger.warning(
+                    f"Browser '{browser}' not found; falling back to system default"
+                )
+
+            webbrowser.open(url)
+            self.logger.info(f"Opened URL for '{trigger}': {url}")
+            print(f"   ✓ Opened URL: {url}")
+        except Exception as e:
+            self.logger.error(f"Failed to open URL for '{trigger}': {e}")
+            print(f"   Failed to open URL: {e}")
+
+    def _search_web(self, query: str, engine: str = 'google',
+                    browser: Optional[str] = None, trigger: str = ''):
+        query = (query or '').strip()
+        if not query:
+            self.logger.warning(f"Empty web search query for '{trigger}'")
+            print("   ✗ Empty search query")
+            return
+
+        engines = {
+            'google': 'https://www.google.com/search?q={query}',
+            'bing': 'https://www.bing.com/search?q={query}',
+            'duckduckgo': 'https://duckduckgo.com/?q={query}',
+            'youtube': 'https://www.youtube.com/results?search_query={query}',
+        }
+        engine_key = (engine or 'google').strip().lower()
+        template = engines.get(engine_key)
+        if not template:
+            self.logger.warning(
+                f"Unknown search engine '{engine_key}', using Google"
+            )
+            template = engines['google']
+        url = template.format(query=quote_plus(query))
+        self._open_browser_url(url, browser=browser, trigger=trigger)
 
     def _execute_rephrase(self, instruction: str, trigger: str):
         import time

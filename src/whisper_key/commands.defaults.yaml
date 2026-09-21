@@ -2,8 +2,9 @@
 # WHISPER KEY - VOICE COMMANDS (EXPERIMENTAL)
 # =============================================================================
 # Speak a trigger phrase during command mode to run the associated command.
-# Each command needs a "trigger" phrase and one action:
-#   "run" (shell command), "hotkey" (keypress), or "type" (deliver pre-written text).
+# Each command needs a trigger/match phrase and one action.
+# Actions include "run", "hotkey", "type", "web_search", "open_url", and "rephrase".
+# Named groups in match_regex are available as template parameters (e.g. ${query}).
 #
 # Matching: triggers are case-insensitive substrings — saying "please open notepad"
 # matches the trigger "open notepad". Longer triggers are checked first.
@@ -11,6 +12,35 @@
 # Full documentation: https://github.com/drajb/whisper-local/blob/master/docs/voice-commands.md
 
 commands:
+  # ---------------------------------------------------------------------------
+  # Local assistant examples (Portuguese)
+  # ---------------------------------------------------------------------------
+  # "abra o chrome e pesquise como fazer uma IA rodar localmente"
+  - match_regex: '^(?:abra|abre) (?:o )?chrome e (?:pesquise|procure)(?: por)? (?P<query>.+)$'
+    web_search: '${query}'
+    engine: "google"
+    browser: "chrome"
+
+  # "pesquise no youtube raspberry pi whisper"
+  # Keep this before the generic Google rule.
+  - match_regex: '^(?:pesquise|procure) (?:no )?youtube(?: por)? (?P<query>.+)$'
+    web_search: '${query}'
+    engine: "youtube"
+
+  # "pesquise como instalar ollama"
+  - match_regex: '^(?:pesquise|procure)(?: no google)?(?: por)? (?P<query>.+)$'
+    web_search: '${query}'
+    engine: "google"
+
+  # "digite bom dia, vou verificar isso hoje"
+  - match_regex: '^(?:digite|escreva) (?P<text>.+)$'
+    type: '${text}'
+
+  # "abra o chrome"
+  - match_regex: '^(?:abra|abre) (?:o )?chrome$'
+    open_url: "https://www.google.com"
+    browser: "chrome"
+
   # Hotkey commands — send keyboard shortcuts to the active window
   - trigger: "undo"
     hotkey: "ctrl+z"

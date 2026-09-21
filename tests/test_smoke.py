@@ -79,6 +79,88 @@ class VoiceCommandsDefaultsTests(unittest.TestCase):
         self.assertNotIn("reg add", defaults.lower())
 
 
+class LocalVoiceAssistantTests(unittest.TestCase):
+    def test_voice_commands_module_parses(self):
+        import ast
+        source = (ROOT / "src" / "whisper_key" / "voice_commands.py").read_text(encoding="utf-8")
+        ast.parse(source)
+
+    def test_portuguese_dynamic_presets_match_examples(self):
+        import re
+        from ruamel.yaml import YAML
+
+        path = ROOT / "src" / "whisper_key" / "commands.defaults.yaml"
+        with open(path, encoding="utf-8") as handle:
+            commands = YAML().load(handle)["commands"]
+
+        chrome_search = next(
+            cmd for cmd in commands
+            if cmd.get("browser") == "chrome" and "web_search" in cmd
+        )
+        match = re.search(
+            chrome_search["match_regex"],
+            "abra o chrome e pesquise como fazer uma IA rodar localmente",
+            flags=re.IGNORECASE,
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match.groupdict()["query"], "como fazer uma IA rodar localmente")
+        self.assertEqual(chrome_search["web_search"], "${query}")
+
+        youtube = next(
+            cmd for cmd in commands
+            if cmd.get("engine") == "youtube" and "web_search" in cmd
+        )
+        match = re.search(
+            youtube["match_regex"],
+            "pesquise no youtube raspberry pi whisper",
+            flags=re.IGNORECASE,
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match.groupdict()["query"], "raspberry pi whisper")
+
+    @unittest.skipUnless(sys.platform in ("win32", "darwin"),
+                         "voice command runtime uses a supported desktop platform")
+    def test_regex_capture_expands_into_template(self):
+        import logging
+        from whisper_key.voice_commands import VoiceCommandManager
+
+        manager = VoiceCommandManager.__new__(VoiceCommandManager)
+        manager.logger = logging.getLogger("test.voice_assistant")
+        manager.commands_path = ""
+        manager.commands = [{
+            "match_regex": r"^pesquise (?P<query>.+)$",
+            "web_search": "${query}",
+        }]
+        manager._reload_if_changed = lambda: None
+
+        command = manager.match_command("pesquise modelos locais leves")
+        self.assertIsNotNone(command)
+        self.assertEqual(command["_params"]["query"], "modelos locais leves")
+        self.assertEqual(
+            manager._expand_template(command["web_search"], params=command["_params"]),
+            "modelos locais leves",
+        )
+
+    def test_web_search_uses_url_encoding_and_no_spoken_shell(self):
+        import ast
+        source = (ROOT / "src" / "whisper_key" / "voice_commands.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        search_fn = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_search_web"
+        )
+        open_fn = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_open_browser_url"
+        )
+        search_src = ast.get_source_segment(source, search_fn)
+        open_src = ast.get_source_segment(source, open_fn)
+        self.assertIn("quote_plus(query)", search_src)
+        self.assertIn("subprocess.Popen([executable, url])", open_src)
+        self.assertNotIn("shell=True", open_src)
+
+
+
 class WhisperBackendTests(unittest.TestCase):
     def test_default_backend_is_faster_whisper(self):
         from ruamel.yaml import YAML
